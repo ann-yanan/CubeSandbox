@@ -1,24 +1,57 @@
-Subject: [PATCH] KVM: riscv: keep VSTIMECMP software state in sync
+From 7800ccee0160dba8c13fa8fed581bad29c9aeacd Mon Sep 17 00:00:00 2001
+From: ann-yanan <156587052+ann-yanan@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 10:07:27 +0800
+Subject: [PATCH] KVM: riscv: Sync next_cycles with VSTIMECMP updates
 
-kvm_riscv_vcpu_sync_interrupts() samples the hardware VSTIMECMP before
-handling an SBI set_timer exit. The SSTC update path then writes only the
-new hardware compare value, leaving timer.next_cycles at the old value.
-If the vCPU is scheduled out before guest re-entry, timer_save() disables
-the hardware comparator and timer_restore() later restores the stale
-software value, overwriting the guest's new deadline and potentially
-leaving a WFI vCPU asleep forever.
+A guest using SBI TIME calls set_timer() to arm its next tick or a
+wake-up deadline before entering WFI. The ecall exits to KVM.
+kvm_riscv_vcpu_sync_interrupts() samples VSTIMECMP into
+timer.next_cycles on VM exit, before kvm_riscv_vcpu_exit() handles the
+SBI call, so next_cycles still contains the previous deadline (Told).
+
+The SBI TIME handler passes the new deadline (Tnew) to
+kvm_riscv_vcpu_update_vstimecmp(), which programs only the hardware
+VSTIMECMP and leaves next_cycles at Told. The vCPU thread is a host
+task and can be scheduled out before the next VM exit, for example when
+its time slice expires, a higher-priority task wakes up, or it blocks.
+kvm_arch_vcpu_put() then calls kvm_riscv_vcpu_timer_save(), which
+disables VSTIMECMP. When the vCPU is loaded again,
+kvm_riscv_vcpu_timer_restore() writes stale next_cycles (Told) back to
+VSTIMECMP, overwriting Tnew. If the guest subsequently enters WFI, the
+interrupt that should wake it at Tnew is lost and it can sleep
+indefinitely.
+
+This was reproduced with a two-vCPU nested-KVM WFI test guest running
+on a four-vCPU PREEMPT_DYNAMIC Linux 7.2 L1 under QEMU TCG on x86_64.
+The unpatched kernel intermittently stopped timer progress on both
+vCPUs, or left only one vCPU making progress. TCG makes the scheduling
+window easier to hit, but the stale software state and save/restore
+sequence are independent of TCG.
 
 Update next_cycles before programming VSTIMECMP, matching the existing
-hrtimer update path and preserving the new deadline across vCPU put/load.
+hrtimer update path, so vCPU put/load preserves the new deadline.
 
+Testing:
+- Two-vCPU SBI TIME/WFI stress on patched Linux 7.2 for 120 seconds:
+  21086 timer wakeups total (vcpu0=10526, vcpu1=10560), wake_delays=0.
+- Two-vCPU IRQFD/MSI WFI regression for 120 seconds: 44068/44068 MSIs
+  injected/received, wake_delays=0, max_delay_ms=0, and no guest, vCPU,
+  or injector errors.
+- CubeSandbox control-plane on nested KVM: template creation, cold
+  start, run_code, snapshot, warm restore, and filesystem/memory state
+  validation passed both locally and in GitHub Actions.
+
+Fixes: 8f5cb44b1bae ("RISC-V: KVM: Support sstc extension")
 Assisted-by: Qoder
 ---
  arch/riscv/kvm/vcpu_timer.c | 3 +++
  1 file changed, 3 insertions(+)
 
+diff --git a/arch/riscv/kvm/vcpu_timer.c b/arch/riscv/kvm/vcpu_timer.c
+index a2cd277..9308067 100644
 --- a/arch/riscv/kvm/vcpu_timer.c
 +++ b/arch/riscv/kvm/vcpu_timer.c
-@@ -72,6 +72,9 @@
+@@ -75,6 +75,9 @@ static int kvm_riscv_vcpu_timer_cancel(struct kvm_vcpu_timer *t)
  
  static int kvm_riscv_vcpu_update_vstimecmp(struct kvm_vcpu *vcpu, u64 ncycles)
  {
@@ -29,4 +62,4 @@ Assisted-by: Qoder
  	ncsr_write(CSR_VSTIMECMP,  ULONG_MAX);
  	ncsr_write(CSR_VSTIMECMPH, ncycles >> 32);
 -- 
-2.51.2
+2.34.1
