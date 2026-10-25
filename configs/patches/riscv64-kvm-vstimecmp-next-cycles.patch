@@ -1,5 +1,5 @@
 From 7800ccee0160dba8c13fa8fed581bad29c9aeacd Mon Sep 17 00:00:00 2001
-From: ann-yanan <156587052+ann-yanan@users.noreply.github.com>
+From: ann-yanan <yanan.he@linux.alibaba.com>
 Date: Sun, 25 Oct 2026 10:07:27 +0800
 Subject: [PATCH] KVM: riscv: Sync next_cycles with VSTIMECMP updates
 
