@@ -448,6 +448,44 @@ func TestRedoCommandParsesNodeScope(t *testing.T) {
 	}
 }
 
+func TestParseContainerOverridesProbeTimeouts(t *testing.T) {
+	tests := []struct {
+		name            string
+		args            []string
+		wantRequestTime int32
+	}{
+		{
+			name:            "default request timeout",
+			args:            []string{"--probe", "49999", "--probe-timeout-ms", "300000"},
+			wantRequestTime: 100,
+		},
+		{
+			name:            "custom request timeout",
+			args:            []string{"--probe", "49999", "--probe-timeout-ms", "300000", "--probe-request-timeout-ms", "30000"},
+			wantRequestTime: 30000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newCreateFromImageContext(t, tt.args)
+			overrides, err := parseContainerOverrides(ctx)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if overrides == nil || overrides.Probe == nil {
+				t.Fatal("expected probe overrides")
+			}
+			if got := overrides.Probe.TimeoutMs; got != 300000 {
+				t.Fatalf("TimeoutMs=%d, want 300000", got)
+			}
+			if got := overrides.Probe.ProbeTimeoutMs; got != tt.wantRequestTime {
+				t.Fatalf("ProbeTimeoutMs=%d, want %d", got, tt.wantRequestTime)
+			}
+		})
+	}
+}
+
 func TestParseContainerOverridesDefaultCpuMemory(t *testing.T) {
 	// When neither --cpu nor --memory is set, resources should not be set in overrides.
 	ctx := newCreateFromImageContext(t, []string{"--env", "KEY=VALUE"})

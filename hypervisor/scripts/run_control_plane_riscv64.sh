@@ -97,6 +97,7 @@ wedge_watch() {
     sleep 5
   done
   [[ -n "${pid}" ]] || return 0
+  printf '%s\n' "${pid}" > "${SHARE}/.l1-shim-pid"
   info "wedge_watch: shim pid=${pid}; grace 240s before sampling"
   sleep 240
   for i in $(seq 1 40); do
@@ -199,8 +200,8 @@ dump_wedge_forensics() {
   #     the epoll wakeup was lost (eventpoll regression);
   #   eventfd-count == 0 = the producer never fired (io_uring completion
   #     or tap RX path regression).
-  # epoll fdinfo tfd lines show per-monitored-fd revents: nonzero revents
-  # while epoll_wait sleeps = ready event stuck in the epoll ready list.
+  # Some kernels omit revents from epoll fdinfo, so also dump each thread's
+  # raw syscall arguments to associate do_epoll_wait with a concrete epoll fd.
   local shim_pid="" f lnk
   for p in $(pgrep -f 'containerd-shim-cube' 2>/dev/null); do
     if ls /proc/"${p}"/task/[0-9]*/comm 2>/dev/null | xargs -r grep -l '^vcpu' 2>/dev/null | head -1 | grep -q .; then
@@ -208,6 +209,11 @@ dump_wedge_forensics() {
     fi
   done
   if [[ -n "${shim_pid}" ]]; then
+    echo "=== wedge forensics: shim ${shim_pid} per-thread raw syscalls ==="
+    for t in /proc/"${shim_pid}"/task/[0-9]*; do
+      echo "--- ${shim_pid}/${t##*/} comm=$(cat "${t}/comm" 2>/dev/null) ---"
+      cat "${t}/syscall" 2>/dev/null || true
+    done
     echo "=== wedge forensics: shim ${shim_pid} fd table ==="
     ls -l /proc/"${shim_pid}"/fd 2>/dev/null || true
     echo "=== wedge forensics: shim ${shim_pid} fdinfo (eventfd/epoll/io_uring/kvm) ==="
@@ -633,6 +639,7 @@ CM="${TB}/CubeMaster/bin/cubemastercli"
   --writable-layer-size 1G --backend xfs \
   --expose-port 49983 --expose-port 49999 \
   --probe 49999 --probe-path /health --probe-timeout-ms 300000 \
+  --probe-request-timeout-ms 30000 \
   --with-cube-ca=false
 TID="$("${CM}" --address 127.0.0.1 --port 8089 tpl ls 2>/dev/null | awk '$2=="riscv64-code-ci"{print $1}' | head -1 || true)"
 [[ -n "${TID}" ]] || die "could not resolve template id for alias riscv64-code-ci"
