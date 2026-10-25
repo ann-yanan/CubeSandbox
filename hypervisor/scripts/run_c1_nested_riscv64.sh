@@ -29,10 +29,14 @@
 #   L1_MEM          L1 memory (default 4G)
 #   QEMU            qemu-system-riscv64 (default: from PATH)
 #   L1_PORT         host ssh port forwarded to L1:22 (default 22699)
-#   L1_PREEMPT      L1 kernel runtime preemption model (default none; the config
-#                   has CONFIG_PREEMPT_DYNAMIC=y, so none|voluntary|full|lazy all
-#                   work). The nested-TCG L2 wedge rate is strongly dependent on
-#                   this (lazy ~50%, none ~5%); use lazy for wedge-debug runs.
+#   L1_PREEMPT      L1 kernel runtime preemption model (default full; the config
+#                   has CONFIG_PREEMPT_DYNAMIC=y). On this 7.2 kernel riscv selects
+#                   ARCH_HAS_PREEMPT_LAZY, which compiles none/voluntary OUT of the
+#                   preempt= parser (sched_dynamic_mode): only full|lazy are
+#                   accepted, anything else prints "Dynamic Preempt: unsupported
+#                   mode" and the boot silently keeps the Kconfig default. Both
+#                   full and lazy have reproduced the nested-TCG L2 wedge, so
+#                   changing this model is not a fix.
 #   L1_GDBSTUB      1 = launch the L0 QEMU with a gdbstub on 127.0.0.1:L1_GDB_PORT
 #                   and, on in-L1 failure, hold the L1 up and dump per-vCPU
 #                   state (info threads / registers / backtraces) before
@@ -64,7 +68,7 @@ L1_SMP="${L1_SMP:-4}"
 L1_MEM="${L1_MEM:-4G}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 L1_PORT="${L1_PORT:-22699}"
-L1_PREEMPT="${L1_PREEMPT:-none}"
+L1_PREEMPT="${L1_PREEMPT:-full}"
 L1_GDBSTUB="${L1_GDBSTUB:-0}"
 # L1_TRACE_KVM=1 enables kvm_entry/kvm_exit tracepoint capture around the
 # template-create window inside the L1 (defaults to following L1_GDBSTUB).
@@ -108,12 +112,13 @@ dump_gdbstub_forensics() {
   fi
   info "gdbstub forensics: gdb=${gdb} vmlinux=${vmlinux:-none} -> ${log}"
   # kvmwalk.py: walk the L1 kernel's global vm_list -> struct kvm ->
-  # vcpu_array xarray and dump the per-vCPU interrupt/blocking state. This is
-  # THE discriminator for the 7.2 wedge: irqs_pending!=0 means the virtual
-  # interrupt was injected but the vCPU was never woken (KVM block/kick bug);
-  # irqs_pending==0 means the interrupt never arrived (VMM/QEMU/device side).
+  # vcpu_array xarray and dump generic interrupt state together with AIA/IMSIC
+  # ownership. In AUTO mode a pending MSI can live in the IMSIC VS-file while
+  # irqs_pending and hvip are both zero, so those generic fields alone do not
+  # distinguish an injection failure from a lost wakeup.
   cat >"${RUNDIR}/kvmwalk.py" <<'PYEOF'
 import gdb
+import os
 
 XA_CHUNK_SIZE = 64
 
@@ -122,6 +127,103 @@ def _i(v):
         return int(v)
     except Exception:
         return 0
+
+def _deref(ptr, type_name):
+    return gdb.Value(_i(ptr)).cast(gdb.lookup_type(type_name).pointer()).dereference()
+
+def _comm(task):
+    try:
+        return task['comm'].string()
+    except Exception:
+        return '?'
+
+def _find_task(pid):
+    init = gdb.parse_and_eval('init_task')
+    task_t = gdb.lookup_type('struct task_struct')
+    tasks_off = task_t['tasks'].bitpos // 8
+    head = _i(init['tasks'].address)
+    nxt = _i(init['tasks']['next'])
+    for _ in range(65536):
+        if not nxt or nxt == head:
+            break
+        task = gdb.Value(nxt - tasks_off).cast(task_t.pointer()).dereference()
+        if _i(task['pid']) == pid:
+            return task
+        nxt = _i(task['tasks']['next'])
+    return None
+
+def _dump_waiters(wq):
+    entry_t = gdb.lookup_type('struct wait_queue_entry')
+    task_t = gdb.lookup_type('struct task_struct')
+    entry_off = entry_t['entry'].bitpos // 8
+    head = _i(wq['head'].address)
+    nxt = _i(wq['head']['next'])
+    count = 0
+    while nxt and nxt != head and count < 1024:
+        entry = gdb.Value(nxt - entry_off).cast(entry_t.pointer()).dereference()
+        task_ptr = _i(entry['private'])
+        if task_ptr:
+            task = gdb.Value(task_ptr).cast(task_t.pointer()).dereference()
+            print("      waiter: pid=%d comm=%s state=%#x on_cpu=%d" %
+                  (_i(task['pid']), _comm(task), _i(task['__state']),
+                   _i(task['on_cpu'])))
+        else:
+            print("      waiter: private=%#x" % task_ptr)
+        count += 1
+        nxt = _i(entry['entry']['next'])
+    if count == 0:
+        print("      waiters: none")
+
+def _dump_eventpoll(eptr):
+    ep = _deref(eptr, 'struct eventpoll')
+    epi_t = gdb.lookup_type('struct epitem')
+    rdl_off = epi_t['rdllink'].bitpos // 8
+    head = _i(ep['rdllist'].address)
+    nxt = _i(ep['rdllist']['next'])
+    count = 0
+    print("    eventpoll @ %#x: ovflist=%#x" % (eptr, _i(ep['ovflist'])))
+    while nxt and nxt != head and count < 4096:
+        epi = gdb.Value(nxt - rdl_off).cast(epi_t.pointer()).dereference()
+        print("      ready: fd=%d events=%#x data=%#x" %
+              (_i(epi['ffd']['fd']), _i(epi['event']['events']),
+               _i(epi['event']['data'])))
+        count += 1
+        nxt = _i(epi['rdllink']['next'])
+    if count == 0:
+        print("      ready: empty")
+    _dump_waiters(ep['wq'])
+
+def dump_shim_event_state():
+    pid_path = os.environ.get('SHIM_PID_FILE', '')
+    if not pid_path or not os.path.exists(pid_path):
+        print("=== shim event state skipped: no pid file ===")
+        return
+    pid = int(open(pid_path).read().strip())
+    task = _find_task(pid)
+    if task is None:
+        print("=== shim event state: pid %d not found ===" % pid)
+        return
+    print("=== shim event state: pid=%d comm=%s ===" % (pid, _comm(task)))
+    eventfd_fops = _i(gdb.parse_and_eval('&eventfd_fops'))
+    eventpoll_fops = _i(gdb.parse_and_eval('&eventpoll_fops'))
+    files = _deref(task['files'], 'struct files_struct')
+    fdt = _deref(files['fdt'], 'struct fdtable')
+    seen_ep = set()
+    for fd in range(_i(fdt['max_fds'])):
+        fptr = _i(fdt['fd'][fd])
+        if not fptr:
+            continue
+        file = _deref(fptr, 'struct file')
+        fop = _i(file['f_op'])
+        if fop == eventfd_fops:
+            ctx = _deref(file['private_data'], 'struct eventfd_ctx')
+            print("    eventfd fd=%d ctx=%#x count=%#x flags=%#x" %
+                  (fd, _i(file['private_data']), _i(ctx['count']),
+                   _i(ctx['flags'])))
+        elif fop == eventpoll_fops and _i(file['private_data']) not in seen_ep:
+            seen_ep.add(_i(file['private_data']))
+            _dump_eventpoll(file['private_data'])
+    print("=== end shim event state ===")
 
 def main():
     print("=== kvm vm_list / vcpu_array walk ===")
@@ -145,6 +247,13 @@ def main():
         kvm = gdb.Value(nxt - vm_list_off).cast(kvm_t.pointer()).dereference()
         nvms += 1
         print("--- kvm @ %#x: online_vcpus=%d ---" % (nxt - vm_list_off, _i(kvm['online_vcpus']['counter'])))
+        try:
+            aia = kvm['arch']['aia']
+            print("  aia: mode=%d in_kernel=%d nr_ids=%d nr_sources=%d" %
+                  (_i(aia['mode']), _i(aia['in_kernel']),
+                   _i(aia['nr_ids']), _i(aia['nr_sources'])))
+        except Exception as e:
+            print("  aia: read failed: %s" % e)
         vcpus = []
         def walk(p):
             a = _i(p)
@@ -170,12 +279,32 @@ def main():
                 print("    guest_context.sepc=%#x" % _i(arch['guest_context']['sepc']))
                 print("    timer: next_set=%d next_cycles=%d sstc=%d" % (_i(arch['timer']['next_set']), _i(arch['timer']['next_cycles']), _i(arch['timer']['sstc_enabled'])))
                 print("    stat: blocking=%d halt_wakeup=%d" % (_i(v['stat']['generic']['blocking']), _i(v['stat']['generic']['halt_wakeup'])))
+                imsic_ptr = _i(arch['aia_context']['imsic_state'])
+                if imsic_ptr:
+                    imsic = gdb.Value(imsic_ptr).cast(gdb.lookup_type('struct imsic').pointer()).dereference()
+                    print("    imsic @ %#x: nr_msis=%d nr_eix=%d vsfile_cpu=%d vsfile_hgei=%d vsfile_va=%#x" %
+                          (imsic_ptr, _i(imsic['nr_msis']), _i(imsic['nr_eix']),
+                           _i(imsic['vsfile_cpu']), _i(imsic['vsfile_hgei']),
+                           _i(imsic['vsfile_va'])))
+                    swfile_ptr = _i(imsic['swfile'])
+                    if swfile_ptr:
+                        swfile = gdb.Value(swfile_ptr).cast(gdb.lookup_type('struct imsic_mrif').pointer()).dereference()
+                        print("      saved SW-file: eidelivery=%#x eithreshold=%#x" %
+                              (_i(swfile['eidelivery']), _i(swfile['eithreshold'])))
+                        for i in range(_i(imsic['nr_eix'])):
+                            print("      saved SW-file eix%d: eip=%#x eie=%#x" %
+                                  (i, _i(swfile['eix'][i]['eip'][0]),
+                                   _i(swfile['eix'][i]['eie'][0])))
             except Exception as e:
                 print("  vcpu @ %#x: read failed: %s" % (va, e))
         nxt = _i(gdb.Value(nxt).cast(gdb.lookup_type('struct list_head').pointer()).dereference()['next'])
     if nvms == 0:
         print("(vm_list empty -- no VMs in this L1?)")
     print("=== end kvm walk ===")
+    try:
+        dump_shim_event_state()
+    except Exception as e:
+        print("shim event state: read failed: %s" % e)
 
 main()
 PYEOF
@@ -183,7 +312,7 @@ PYEOF
     echo "=== gdbstub forensics ($(date -u +%FT%TZ)) ==="
     echo "gdb: ${gdb}"
     echo "vmlinux: ${vmlinux:-<none, registers will be raw>}"
-    "${gdb}" -nx -batch \
+    SHIM_PID_FILE="${SHARE}/.l1-shim-pid" "${gdb}" -nx -batch \
       ${vmlinux:+"${vmlinux}"} \
       -ex "set pagination off" \
       -ex "set architecture riscv:rv64" \
@@ -195,6 +324,7 @@ PYEOF
       -ex "info threads" \
       -ex "thread apply all bt" \
       -ex "thread apply all info registers" \
+      -ex "thread apply all info registers hgeie hgeip hstatus" \
       -ex "source ${RUNDIR}/kvmwalk.py" \
       -ex "detach" 2>&1
     echo "=== end gdbstub forensics ==="
@@ -385,11 +515,13 @@ GDB_ARGS=()
 if [[ "${L1_GDBSTUB}" == "1" ]]; then
   GDB_ARGS=(-gdb "tcp:127.0.0.1:${L1_GDB_PORT}")
 fi
-# preempt=${L1_PREEMPT}: the nested-TCG L2 boot wedge rate is highly sensitive
-# to the L1 kernel's preemption model (measured on 232 bootloop: PREEMPT_LAZY
-# L1 ~50% wedge, preempt=none+HZ100 L1 ~5%). The 7.2 guest kernel config ships
-# CONFIG_PREEMPT_DYNAMIC=y so the L1 selects the model at boot; this only
-# affects the L1 host, the L2 guest keeps its own defaults.
+# preempt=${L1_PREEMPT}: select the L1 runtime preemption model for A/B
+# debugging. Both full and lazy have reproduced the nested-TCG L2 wedge, so
+# this is not a workaround. Note none|voluntary are NOT accepted by this 7.2
+# kernel (ARCH_HAS_PREEMPT_LAZY removes them from the preempt= parser, and
+# PREEMPT_NONE needs ARCH_NO_PREEMPT which riscv does not select) -- the Kconfig
+# default model is the only way to get full vs lazy without a cmdline override.
+# This only affects the L1 host; the L2 guest keeps its own defaults.
 # NOTE: this comment must stay OUTSIDE the qemu line-continuation chain --
 # a comment line inside a `\`-continued command terminates the command early.
 "${QEMU}" \
