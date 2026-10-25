@@ -361,6 +361,7 @@ jobs:
               configs/kernel-oc9.riscv64.config \
               configs/patches/riscv64-dax-zeropage-folio.patch \
               configs/patches/riscv64-kvm-zeropage-dirtylog.patch \
+              configs/patches/riscv64-kvm-vstimecmp-next-cycles.patch \
               scripts/build-kernel.sh \
               hypervisor/scripts/build_guest_kernel_riscv64.sh \
               | sha256sum \

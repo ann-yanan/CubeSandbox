@@ -144,17 +144,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.WORKLOADS_DIR }}/Image
-          # The key hashes every input that can change the Image: config, both
+          # The key hashes every input that can change the Image: config, all
           # out-of-tree patches, and both build scripts. No restore-keys -- a
           # prefix-matched stale kernel would silently drop a patch change.
-          key: kernel-7.2-riscv64-v1-${{ hashFiles('configs/kernel-oc9.riscv64.config', 'configs/patches/riscv64-dax-zeropage-folio.patch', 'configs/patches/riscv64-kvm-zeropage-dirtylog.patch', 'scripts/build-kernel.sh', 'hypervisor/scripts/build_guest_kernel_riscv64.sh') }}
+          key: kernel-7.2-riscv64-v1-${{ hashFiles('configs/kernel-oc9.riscv64.config', 'configs/patches/riscv64-dax-zeropage-folio.patch', 'configs/patches/riscv64-kvm-zeropage-dirtylog.patch', 'configs/patches/riscv64-kvm-vstimecmp-next-cycles.patch', 'scripts/build-kernel.sh', 'hypervisor/scripts/build_guest_kernel_riscv64.sh') }}
 
       - name: Build 7.2 guest kernel Image (in-place, cross-compiled)
         if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           chmod +x hypervisor/scripts/build_guest_kernel_riscv64.sh
-          # -> ${WORKLOADS_DIR}/Image (PE/EFI-stub, CONFIG_KVM=y, both patches applied).
+          # -> ${WORKLOADS_DIR}/Image (PE/EFI-stub, CONFIG_KVM=y, all patches applied).
           # Serves BOTH the C1 L1 host kernel (qemu -kernel, needs /dev/kvm) and the
           # L2 guest kernel. WORKLOADS_DIR is inherited from the workflow env.
           hypervisor/scripts/build_guest_kernel_riscv64.sh

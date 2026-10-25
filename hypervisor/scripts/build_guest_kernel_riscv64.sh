@@ -7,7 +7,7 @@
 # guest assets (OpenSBI 1.7 fw_dynamic.bin and the Ubuntu noble riscv64 rootfs) DO
 # have official public prebuilts and are fetched by fetch_guest_assets_riscv64.sh.
 #
-# This script is the SINGLE implementation of "fetch v7.2 source -> apply the two
+# This script is the SINGLE implementation of "fetch v7.2 source -> apply the three
 # out-of-tree CubeSandbox patches -> cross-compile the PE/EFI-stub Image", shared by:
 #   * .github/workflows/riscv64-snapshot-integration.yml (件 4: the C1 L1 host kernel
 #     AND the L2 guest kernel -- one CONFIG_KVM=y Image serves both layers)
@@ -54,6 +54,7 @@ BUILD_KERNEL_SH="${REPO_ROOT}/scripts/build-kernel.sh"
 PATCHES=(
   "${REPO_ROOT}/configs/patches/riscv64-dax-zeropage-folio.patch"
   "${REPO_ROOT}/configs/patches/riscv64-kvm-zeropage-dirtylog.patch"
+  "${REPO_ROOT}/configs/patches/riscv64-kvm-vstimecmp-next-cycles.patch"
 )
 
 [ -f "${KERNEL_CONFIG}" ]  || die "kernel config not found: ${KERNEL_CONFIG}"
@@ -82,7 +83,7 @@ else
   [ -f "${KERNEL_SRC_DIR}/Makefile" ] || die "extracted tree has no Makefile (bad archive layout?)"
 fi
 
-# 2) apply the two out-of-tree CubeSandbox patches (skip cleanly if already applied)
+# 2) apply the three out-of-tree CubeSandbox patches (skip cleanly if already applied)
 for p in "${PATCHES[@]}"; do
   echo "[kernel] === apply $(basename "${p}") ==="
   if patch -p1 -d "${KERNEL_SRC_DIR}" --dry-run --forward --no-backup-if-mismatch < "${p}" >/dev/null 2>&1; then

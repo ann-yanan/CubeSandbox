@@ -1,0 +1,32 @@
+Subject: [PATCH] KVM: riscv: keep VSTIMECMP software state in sync
+
+kvm_riscv_vcpu_sync_interrupts() samples the hardware VSTIMECMP before
+handling an SBI set_timer exit. The SSTC update path then writes only the
+new hardware compare value, leaving timer.next_cycles at the old value.
+If the vCPU is scheduled out before guest re-entry, timer_save() disables
+the hardware comparator and timer_restore() later restores the stale
+software value, overwriting the guest's new deadline and potentially
+leaving a WFI vCPU asleep forever.
+
+Update next_cycles before programming VSTIMECMP, matching the existing
+hrtimer update path and preserving the new deadline across vCPU put/load.
+
+Assisted-by: Qoder
+---
+ arch/riscv/kvm/vcpu_timer.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+--- a/arch/riscv/kvm/vcpu_timer.c
++++ b/arch/riscv/kvm/vcpu_timer.c
+@@ -72,6 +72,9 @@
+ 
+ static int kvm_riscv_vcpu_update_vstimecmp(struct kvm_vcpu *vcpu, u64 ncycles)
+ {
++	struct kvm_vcpu_timer *t = &vcpu->arch.timer;
++
++	t->next_cycles = ncycles;
+ #if defined(CONFIG_32BIT)
+ 	ncsr_write(CSR_VSTIMECMP,  ULONG_MAX);
+ 	ncsr_write(CSR_VSTIMECMPH, ncycles >> 32);
+-- 
+2.51.2
