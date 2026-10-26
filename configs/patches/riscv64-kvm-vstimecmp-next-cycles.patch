@@ -1,63 +1,54 @@
-From 7800ccee0160dba8c13fa8fed581bad29c9aeacd Mon Sep 17 00:00:00 2001
-From: ann-yanan <yanan.he@linux.alibaba.com>
-Date: Sun, 25 Oct 2026 10:07:27 +0800
-Subject: [PATCH] KVM: riscv: Sync next_cycles with VSTIMECMP updates
+From 647440891600856f5e934a0ecc06a62f5bb31759 Mon Sep 17 00:00:00 2001
+From: Jun Sun <jsun@junsun.net>
+Date: Tue, 9 Jun 2026 11:39:21 -0700
+Subject: [PATCH] KVM: riscv: mirror VSTIMECMP into t->next_cycles in sstc path
 
-A guest using SBI TIME calls set_timer() to arm its next tick or a
-wake-up deadline before entering WFI. The ecall exits to KVM.
-kvm_riscv_vcpu_sync_interrupts() samples VSTIMECMP into
-timer.next_cycles on VM exit, before kvm_riscv_vcpu_exit() handles the
-SBI call, so next_cycles still contains the previous deadline (Told).
+update_vstimecmp writes the new target to the hardware-visible VSTIMECMP
+CSR (via NACL shmem) but did not also update t->next_cycles. Between
+the SBI set_timer handler and the next guest entry, preemption can fire
+(at preempt_enable after sync_interrupts, or via schedule() in
+kvm_xfer_to_guest_mode_handle_work / kvm_riscv_check_vcpu_requests).
+When the vCPU is reloaded, kvm_arch_vcpu_load -> kvm_riscv_vcpu_timer_restore
+writes ncsr_write(VSTIMECMP, t->next_cycles), which clobbers the fresh
+shmem value with a stale t->next_cycles from a prior iteration. The
+guest then resumes with VSTIMECMP set to an old far-future value;
+hardware never asserts VSTIP; the guest's timer ISR never runs; boot
+wedges with riscv-timer counter frozen.
 
-The SBI TIME handler passes the new deadline (Tnew) to
-kvm_riscv_vcpu_update_vstimecmp(), which programs only the hardware
-VSTIMECMP and leaves next_cycles at Told. The vCPU thread is a host
-task and can be scheduled out before the next VM exit, for example when
-its time slice expires, a higher-priority task wakes up, or it blocks.
-kvm_arch_vcpu_put() then calls kvm_riscv_vcpu_timer_save(), which
-disables VSTIMECMP. When the vCPU is loaded again,
-kvm_riscv_vcpu_timer_restore() writes stale next_cycles (Told) back to
-VSTIMECMP, overwriting Tnew. If the guest subsequently enters WFI, the
-interrupt that should wake it at Tnew is lost and it can sleep
-indefinitely.
+Without the fix AOSP/cuttlefish stalls on K3 + crosvm: guest
+/proc/interrupts riscv-timer counter frozen indefinitely while
+/proc/uptime keeps climbing. With the fix AOSP/cuttlefish boots up fine.
 
-This was reproduced with a two-vCPU nested-KVM WFI test guest running
-on a four-vCPU PREEMPT_DYNAMIC Linux 7.2 L1 under QEMU TCG on x86_64.
-The unpatched kernel intermittently stopped timer progress on both
-vCPUs, or left only one vCPU making progress. TCG makes the scheduling
-window easier to hit, but the stale software state and save/restore
-sequence are independent of TCG.
+Mirror the value into t->next_cycles next to the ncsr_write, matching
+what kvm_riscv_vcpu_update_hrtimer already does for the non-sstc path.
 
-Update next_cycles before programming VSTIMECMP, matching the existing
-hrtimer update path, so vCPU put/load preserves the new deadline.
-
-Testing:
-- Two-vCPU SBI TIME/WFI stress on patched Linux 7.2 for 120 seconds:
-  21086 timer wakeups total (vcpu0=10526, vcpu1=10560), wake_delays=0.
-- Two-vCPU IRQFD/MSI WFI regression for 120 seconds: 44068/44068 MSIs
-  injected/received, wake_delays=0, max_delay_ms=0, and no guest, vCPU,
-  or injector errors.
-- CubeSandbox control-plane on nested KVM: template creation, cold
-  start, run_code, snapshot, warm restore, and filesystem/memory state
-  validation passed both locally and in GitHub Actions.
+Backport to Linux 7.2: regenerate the hunk against v7.2 and retain its
+RV32 ULONG_MAX/high/low write sequence. The fix itself is unchanged.
 
 Fixes: 8f5cb44b1bae ("RISC-V: KVM: Support sstc extension")
+Link: https://lore.kernel.org/linux-riscv/20260609183921.42043-1-jsun@junsun.net
 Assisted-by: Qoder
 ---
- arch/riscv/kvm/vcpu_timer.c | 3 +++
- 1 file changed, 3 insertions(+)
+ arch/riscv/kvm/vcpu_timer.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
 
 diff --git a/arch/riscv/kvm/vcpu_timer.c b/arch/riscv/kvm/vcpu_timer.c
-index a2cd277..9308067 100644
+index ae53133..ef2915e 100644
 --- a/arch/riscv/kvm/vcpu_timer.c
 +++ b/arch/riscv/kvm/vcpu_timer.c
-@@ -75,6 +75,9 @@ static int kvm_riscv_vcpu_timer_cancel(struct kvm_vcpu_timer *t)
+@@ -72,6 +72,15 @@ static int kvm_riscv_vcpu_timer_cancel(struct kvm_vcpu_timer *t)
  
  static int kvm_riscv_vcpu_update_vstimecmp(struct kvm_vcpu *vcpu, u64 ncycles)
  {
-+	struct kvm_vcpu_timer *t = &vcpu->arch.timer;
-+
-+	t->next_cycles = ncycles;
++	/*
++	 * Mirror kvm_riscv_vcpu_update_hrtimer (the non-sstc path):
++	 * update t->next_cycles, and then set hw CSR_VSTIMECMP.
++	 * Otherwise, a race condition with preemption can cause
++	 * CSR_VSTIMECMP to end up holding a stale value
++	 * (kvm_riscv_vcpu_timer_restore writes the old t->next_cycles
++	 * back into VSTIMECMP shmem on sched-in).
++	 */
++	vcpu->arch.timer.next_cycles = ncycles;
  #if defined(CONFIG_32BIT)
  	ncsr_write(CSR_VSTIMECMP,  ULONG_MAX);
  	ncsr_write(CSR_VSTIMECMPH, ncycles >> 32);
