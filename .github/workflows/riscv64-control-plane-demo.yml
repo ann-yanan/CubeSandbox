@@ -95,27 +95,11 @@ jobs:
             || make all-riscv64 SKIP_BUILDER_IMAGE_CHECK=1
           make l2pause-riscv64 SKIP_BUILDER_IMAGE_CHECK=1 || make l2pause-riscv64
 
-      # Default: use the prebuilt XuanTie (6.6.102 Yocto) kernel from the
-      # ci-assets release -- it is the kernel the nested L2 boot was validated
-      # on (4/4 under control-plane load on 232), and skipping the cross-build
-      # saves the whole kernel-cache/compile stage. Set repo variable
-      # RISCV64_BUILD_KERNEL=1 to build the 7.2 kernel from
-      # configs/kernel-oc9.riscv64.config instead (kernel iteration path).
-      - name: Fetch XuanTie guest kernel Image from ci-assets
-        if: vars.RISCV64_BUILD_KERNEL != '1'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p "${WORKLOADS_DIR}"
-          base="https://github.com/${{ github.repository }}/releases/download/ci-assets"
-          curl -fSL --retry 3 -H "Authorization: Bearer ${GH_TOKEN}" \
-            -o "${WORKLOADS_DIR}/Image" "${base}/Image-xuantie-6.6.102"
-          ls -la "${WORKLOADS_DIR}/Image"
-
+      # Use the same patched 7.2 kernel as the snapshot workflow for both L1
+      # and L2. The cache key covers the config, all three patches and both
+      # build scripts, so no stale Image can be selected through restore-keys.
       - name: Cache 7.2 guest kernel Image
         id: cache-kernel
-        if: vars.RISCV64_BUILD_KERNEL == '1'
         uses: actions/cache@v4
         with:
           # The vmlinux.elf (real ELF with DWARF; build-kernel.sh normalizes
@@ -129,7 +113,7 @@ jobs:
           key: kernel-7.2-riscv64-v3-${{ hashFiles('configs/kernel-oc9.riscv64.config', 'configs/patches/riscv64-dax-zeropage-folio.patch', 'configs/patches/riscv64-kvm-zeropage-dirtylog.patch', 'configs/patches/riscv64-kvm-vstimecmp-next-cycles.patch', 'scripts/build-kernel.sh', 'hypervisor/scripts/build_guest_kernel_riscv64.sh') }}
 
       - name: Build 7.2 guest kernel Image (in-place, cross-compiled)
-        if: vars.RISCV64_BUILD_KERNEL == '1' && steps.cache-kernel.outputs.cache-hit != 'true'
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
         env:
           # Fixed WORK_DIR (instead of the script's mktemp default) so the built
           # vmlinux lands at a known path for the gdbstub wedge-debug step.
