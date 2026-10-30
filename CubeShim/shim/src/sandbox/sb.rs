@@ -562,7 +562,13 @@ impl SandBox {
 
         let mut ctx = self.ctx.clone();
 
-        ctx.timeout_nano = 25 * 1000 * 1000 * 1000;
+        // Nested TCG can exceed the normal 25s agent setup budget.
+        let create_sandbox_secs = std::env::var("CUBE_AGENT_CREATE_SANDBOX_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(25);
+        ctx.timeout_nano = create_sandbox_secs * 1000 * 1000 * 1000;
         if self.app_snapshot_create() {
             req.start_mode = protoc::agent::StartMode::SNAPSHOT;
         }

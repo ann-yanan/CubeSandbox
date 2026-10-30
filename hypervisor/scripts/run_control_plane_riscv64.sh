@@ -559,6 +559,7 @@ info "start cubelet (:9999)"
 # while the dirty_log=false integration lane boots the same guest reliably.
 CUBE_SANDBOX_NODE_IP="${CUBE_SANDBOX_NODE_IP}" \
   CUBE_VM_BOOT_TIMEOUT_SECS="${CUBE_VM_BOOT_TIMEOUT_SECS:-1200}" \
+  CUBE_AGENT_CREATE_SANDBOX_TIMEOUT_SECS="${CUBE_AGENT_CREATE_SANDBOX_TIMEOUT_SECS:-25}" \
   CUBE_GUEST_CONSOLE_DIR=/data/log/CubeVmm \
   CUBE_GUEST_DEBUG=1 \
   CUBE_DISABLE_VM_DIRTY_LOG=1 \

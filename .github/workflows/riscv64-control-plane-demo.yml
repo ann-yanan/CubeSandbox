@@ -312,6 +312,7 @@ jobs:
           # RISCV64_L1_PREEMPT=lazy raises the ~5% wedge rate to ~50%.
           L1_GDBSTUB: ${{ vars.RISCV64_L1_GDBSTUB || '0' }}
           L1_PREEMPT: ${{ inputs.l1_preempt || vars.RISCV64_L1_PREEMPT || 'none' }}
+          CUBE_AGENT_CREATE_SANDBOX_TIMEOUT_SECS: ${{ inputs.kernel_flavor == 'xuantie-6.6.36' && '120' || '25' }}
           RUNDIR: ${{ runner.temp }}/c1-l1
           QEMU: ${{ env.WORKLOADS_DIR }}/qemu-install/bin/qemu-system-riscv64
           L0_AIA: ${{ inputs.l0_aia || 'aplic-imsic' }}
