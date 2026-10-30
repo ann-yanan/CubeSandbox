@@ -447,7 +447,7 @@ install -m 0644 "${SHARE}/cpconf/templatecenter-conf.yaml"  "${TB}/CubeTemplateC
 install -m 0644 "${SHARE}/cpconf/cubelet-config.toml"       "${TB}/Cubelet/config/config.toml"
 install -m 0644 "${SHARE}/cpconf/cubelet-dynamicconf.yaml"  "${TB}/Cubelet/dynamicconf/conf.yaml"
 install -m 0644 "${SHARE}/config-cube.toml"                 "${TB}/cube-shim/conf/config-cube.toml"
-cp -f "${SHARE}/Image" "${TB}/cube-kernel-scf/vmlinux"
+cp -f "${SHARE}/vmlinux" "${TB}/cube-kernel-scf/vmlinux"
 cp -f "${SHARE}/cube-guest-image-cpu.img" "${TB}/cube-image/cube-guest-image-cpu.img"
 cp -f "${SHARE}/cube-agent.ext4" "${TB}/cube-agent/cube-agent.ext4"
 for d in cube-kernel-scf cube-image cube-agent; do echo "0.0.0-dev" > "${TB}/${d}/version"; done
