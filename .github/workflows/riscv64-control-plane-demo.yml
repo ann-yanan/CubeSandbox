@@ -17,21 +17,77 @@ name: RISC-V Control-Plane Demo (no LLM)
 # configs in hypervisor/scripts/control-plane-riscv64/ are derived verbatim
 # from the bed's cubetoolbox.
 #
-# workflow_dispatch-only on purpose: the whole chain runs under nested TCG
-# (template build alone took 18-35 min on the manual bed), so this is a
-# measurement/validation lane, not a PR gate. The PR-gate half of the no-LLM
-# example coverage is the "Examples sanity (no LLM)" job in
-# riscv64-snapshot-integration.yml.
+# The whole chain runs under nested TCG (template build alone took 18-35 min
+# on the manual bed), so pull_request triggering is limited to paths that can
+# affect this lane. workflow_dispatch remains available for manual reruns.
 #
 # Control-plane assets (registry/crane/sandbox base image/py3+ci layer) are
 # riscv64 binaries not produced by this repo's build; they are mirrored from
 # the validated bed to this fork's `ci-assets` release and cached.
 
 on:
+  pull_request:
+    paths:
+      - 'hypervisor/**'
+      - 'CubeShim/**'
+      - 'agent/**'
+      - 'guest-init/**'
+      - 'Cubelet/**'
+      - 'CubeMaster/**'
+      - 'CubeTemplateCenter/**'
+      - 'CubeOps/**'
+      - 'CubeAPI/**'
+      - 'CubeNet/**'
+      - 'CubeProxy/**'
+      - 'cubecow/**'
+      - 'cube-lifecycle-manager/**'
+      - 'pkgs/**'
+      - 'examples/openai-agents-code-interpreter/**'
+      - 'examples/volume/s3/**'
+      - 'configs/kernel-oc9.riscv64.config'
+      - 'configs/patches/**'
+      - 'scripts/build-kernel.sh'
+      - 'deploy/one-click/build-guest-image-riscv64.sh'
+      - 'deploy/one-click/build-agent-ext4.sh'
+      - 'deploy/one-click/config-cube.toml'
+      - 'deploy/one-click/cubeproxy/global.conf.template'
+      - 'docker/Dockerfile.builder'
+      - 'Makefile'
+      - '.github/workflows/riscv64-control-plane-demo.yml'
+  workflow_call:
+    inputs:
+      kernel_flavor:
+        description: Kernel source flavor
+        required: false
+        type: string
+        default: upstream-7.2
+      l1_preempt:
+        description: L1 dynamic preemption mode
+        required: false
+        type: string
+        default: none
   workflow_dispatch:
+    inputs:
+      kernel_flavor:
+        description: Kernel source flavor
+        required: true
+        type: choice
+        default: upstream-7.2
+        options:
+          - upstream-7.2
+          - xuantie-6.6.36
+      l1_preempt:
+        description: L1 dynamic preemption mode
+        required: true
+        type: choice
+        default: none
+        options:
+          - none
+          - full
+          - lazy
 
 concurrency:
-  group: riscv64-control-plane-demo-${{ github.ref }}
+  group: riscv64-control-plane-demo-${{ inputs.kernel_flavor || 'upstream-7.2' }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -95,11 +151,11 @@ jobs:
             || make all-riscv64 SKIP_BUILDER_IMAGE_CHECK=1
           make l2pause-riscv64 SKIP_BUILDER_IMAGE_CHECK=1 || make l2pause-riscv64
 
-      # Use the same patched 7.2 kernel as the snapshot workflow for both L1
-      # and L2. The cache key covers the config, all three patches and both
-      # build scripts, so no stale Image can be selected through restore-keys.
-      - name: Cache 7.2 guest kernel Image
-        id: cache-kernel
+      # Use the selected kernel for both L1 and L2. Each flavor has an
+      # independent input-hashed cache with no restore-keys fallback.
+      - name: Cache patched 7.2 guest kernel Image
+        id: cache-kernel-upstream
+        if: (inputs.kernel_flavor || 'upstream-7.2') == 'upstream-7.2'
         uses: actions/cache@v4
         with:
           # The vmlinux.elf (real ELF with DWARF; build-kernel.sh normalizes
@@ -112,8 +168,8 @@ jobs:
             ${{ runner.temp }}/kernel-build/build/vmlinux.elf
           key: kernel-7.2-riscv64-v3-${{ hashFiles('configs/kernel-oc9.riscv64.config', 'configs/patches/riscv64-dax-zeropage-folio.patch', 'configs/patches/riscv64-kvm-zeropage-dirtylog.patch', 'configs/patches/riscv64-kvm-vstimecmp-next-cycles.patch', 'scripts/build-kernel.sh', 'hypervisor/scripts/build_guest_kernel_riscv64.sh') }}
 
-      - name: Build 7.2 guest kernel Image (in-place, cross-compiled)
-        if: steps.cache-kernel.outputs.cache-hit != 'true'
+      - name: Build patched 7.2 guest kernel Image (in-place, cross-compiled)
+        if: (inputs.kernel_flavor || 'upstream-7.2') == 'upstream-7.2' && steps.cache-kernel-upstream.outputs.cache-hit != 'true'
         env:
           # Fixed WORK_DIR (instead of the script's mktemp default) so the built
           # vmlinux lands at a known path for the gdbstub wedge-debug step.
@@ -122,6 +178,26 @@ jobs:
           set -euo pipefail
           chmod +x hypervisor/scripts/build_guest_kernel_riscv64.sh
           hypervisor/scripts/build_guest_kernel_riscv64.sh
+
+      - name: Cache RuyiSDK 6.6.36 guest kernel Image
+        id: cache-kernel-xuantie
+        if: inputs.kernel_flavor == 'xuantie-6.6.36'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.WORKLOADS_DIR }}/Image
+            ${{ runner.temp }}/kernel-build/build/vmlinux
+            ${{ runner.temp }}/kernel-build/build/vmlinux.elf
+          key: kernel-xuantie-6.6.36-riscv64-v1-92c3f5343b3cdfb5b85a9638310b36537acb0c5e-${{ hashFiles('configs/kernel-oc9.riscv64.config', 'scripts/build-kernel.sh', 'hypervisor/scripts/build_xuantie_kernel_riscv64.sh') }}
+
+      - name: Build RuyiSDK 6.6.36 guest kernel Image (in-place, cross-compiled)
+        if: inputs.kernel_flavor == 'xuantie-6.6.36' && steps.cache-kernel-xuantie.outputs.cache-hit != 'true'
+        env:
+          WORK_DIR: ${{ runner.temp }}/kernel-build
+        run: |
+          set -euo pipefail
+          chmod +x hypervisor/scripts/build_xuantie_kernel_riscv64.sh
+          hypervisor/scripts/build_xuantie_kernel_riscv64.sh
 
       - name: Install gdb-multiarch (gdbstub wedge forensics)
         if: vars.RISCV64_L1_GDBSTUB == '1'
@@ -200,7 +276,7 @@ jobs:
           # L0 QEMU with a gdbstub and dumps the wedged L1 vCPU state on failure;
           # RISCV64_L1_PREEMPT=lazy raises the ~5% wedge rate to ~50%.
           L1_GDBSTUB: ${{ vars.RISCV64_L1_GDBSTUB || '0' }}
-          L1_PREEMPT: ${{ vars.RISCV64_L1_PREEMPT || 'none' }}
+          L1_PREEMPT: ${{ inputs.l1_preempt || vars.RISCV64_L1_PREEMPT || 'none' }}
           RUNDIR: ${{ runner.temp }}/c1-l1
           QEMU: ${{ env.WORKLOADS_DIR }}/qemu-install/bin/qemu-system-riscv64
           RUN_MODE: control-plane
@@ -214,7 +290,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riscv64-c1-control-plane-logs
+          name: riscv64-c1-control-plane-logs-${{ inputs.kernel_flavor || 'upstream-7.2' }}
           path: |
             ${{ runner.temp }}/c1-l1/serial.log
             ${{ runner.temp }}/c1-l1/control-plane.log

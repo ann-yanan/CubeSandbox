@@ -52,11 +52,28 @@ on:
       - 'CubeShim/**'
       - 'agent/**'
       - 'guest-init/**'
+      - 'Cubelet/**'
+      - 'CubeMaster/**'
+      - 'CubeTemplateCenter/**'
+      - 'CubeOps/**'
+      - 'CubeAPI/**'
+      - 'CubeNet/**'
+      - 'CubeProxy/**'
+      - 'cubecow/**'
+      - 'cube-lifecycle-manager/**'
+      - 'pkgs/**'
+      - 'examples/openai-agents-code-interpreter/**'
+      - 'examples/volume/s3/**'
       - 'configs/kernel-oc9.riscv64.config'
       - 'configs/patches/**'
       - 'scripts/build-kernel.sh'
       - 'deploy/one-click/build-guest-image-riscv64.sh'
       - 'deploy/one-click/build-agent-ext4.sh'
+      - 'deploy/one-click/config-cube.toml'
+      - 'deploy/one-click/cubeproxy/global.conf.template'
+      - 'docker/Dockerfile.builder'
+      - 'Makefile'
+      - '.github/workflows/riscv64-control-plane-demo.yml'
       - '.github/workflows/riscv64-snapshot-integration.yml'
   workflow_dispatch:
 
@@ -231,6 +248,14 @@ jobs:
             ${{ runner.temp }}/c1-l1/qemu-guest-errors.log
           if-no-files-found: ignore
           retention-days: 7
+
+  control-plane-xuantie-6-6:
+    name: riscv64 XuanTie 6.6.36 control plane + snapshot demo
+    uses: ./.github/workflows/riscv64-control-plane-demo.yml
+    with:
+      kernel_flavor: xuantie-6.6.36
+      l1_preempt: full
+    secrets: inherit
 
   # Examples sanity gate: every examples/**/*.py must byte-compile, the no-LLM
   # demo's deps must install from PyPI, and its CLI contract (usage / missing-env
