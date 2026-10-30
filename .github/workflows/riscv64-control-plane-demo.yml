@@ -188,7 +188,7 @@ jobs:
             ${{ env.WORKLOADS_DIR }}/Image
             ${{ runner.temp }}/kernel-build/build/vmlinux
             ${{ runner.temp }}/kernel-build/build/vmlinux.elf
-          key: kernel-xuantie-6.6.36-riscv64-v1-92c3f5343b3cdfb5b85a9638310b36537acb0c5e-${{ hashFiles('configs/kernel-oc9.riscv64.config', 'scripts/build-kernel.sh', 'hypervisor/scripts/build_xuantie_kernel_riscv64.sh') }}
+          key: kernel-xuantie-6.6.36-riscv64-v1-92c3f5343b3cdfb5b85a9638310b36537acb0c5e-${{ hashFiles('configs/kernel-oc9.riscv64.config', 'configs/patches/riscv64-6.6-kvm-vstimecmp-next-cycles.patch', 'configs/patches/riscv64-6.6-kvm-timer-state-restore.patch', 'scripts/build-kernel.sh', 'hypervisor/scripts/build_xuantie_kernel_riscv64.sh') }}
 
       - name: Build RuyiSDK 6.6.36 guest kernel Image (in-place, cross-compiled)
         if: inputs.kernel_flavor == 'xuantie-6.6.36' && steps.cache-kernel-xuantie.outputs.cache-hit != 'true'

@@ -19,9 +19,16 @@ KERNEL_CONFIG="${REPO_ROOT}/configs/kernel-oc9.riscv64.config"
 BUILD_KERNEL_SH="${REPO_ROOT}/scripts/build-kernel.sh"
 CROSS_COMPILE="${KERNEL_CROSS_COMPILE:-riscv64-linux-gnu-}"
 WORK_DIR="${WORK_DIR:-$(mktemp -d)}"
+PATCHES=(
+  "${REPO_ROOT}/configs/patches/riscv64-6.6-kvm-vstimecmp-next-cycles.patch"
+  "${REPO_ROOT}/configs/patches/riscv64-6.6-kvm-timer-state-restore.patch"
+)
 
 [ -f "${KERNEL_CONFIG}" ] || die "kernel config not found: ${KERNEL_CONFIG}"
 [ -f "${BUILD_KERNEL_SH}" ] || die "build-kernel.sh not found: ${BUILD_KERNEL_SH}"
+for patch_file in "${PATCHES[@]}"; do
+  [ -f "${patch_file}" ] || die "kernel patch not found: ${patch_file}"
+done
 
 mkdir -p "${WORK_DIR}"
 archive="${WORK_DIR}/linux-xuantie-${KERNEL_COMMIT}.tar.gz"
@@ -42,6 +49,11 @@ tar -xzf "${archive}" -C "${KERNEL_SRC_DIR}" --strip-components=1
 BUILD_CONFIG="${WORK_DIR}/kernel.config"
 cp "${KERNEL_CONFIG}" "${BUILD_CONFIG}"
 "${KERNEL_SRC_DIR}/scripts/config" --file "${BUILD_CONFIG}" --disable ERRATA_ANDES
+
+for patch_file in "${PATCHES[@]}"; do
+  echo "[kernel] === apply $(basename "${patch_file}") ==="
+  patch -p1 -d "${KERNEL_SRC_DIR}" --forward --no-backup-if-mismatch < "${patch_file}"
+done
 
 KERNEL_SRC_DIR="${KERNEL_SRC_DIR}" \
 KERNEL_TARGET_ARCH=riscv64 \
