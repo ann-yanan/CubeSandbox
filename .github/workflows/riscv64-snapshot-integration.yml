@@ -255,6 +255,7 @@ jobs:
     with:
       kernel_flavor: xuantie-6.6.36
       l1_preempt: full
+      l0_aia: aplic
     secrets: inherit
 
   # Examples sanity gate: every examples/**/*.py must byte-compile, the no-LLM

@@ -66,6 +66,11 @@ on:
         required: false
         type: string
         default: none
+      l0_aia:
+        description: L0 QEMU AIA mode
+        required: false
+        type: string
+        default: aplic-imsic
   workflow_dispatch:
     inputs:
       kernel_flavor:
@@ -85,9 +90,17 @@ on:
           - none
           - full
           - lazy
+      l0_aia:
+        description: L0 QEMU AIA mode
+        required: true
+        type: choice
+        default: aplic-imsic
+        options:
+          - aplic-imsic
+          - aplic
 
 concurrency:
-  group: riscv64-control-plane-demo-${{ inputs.kernel_flavor || 'upstream-7.2' }}-${{ github.ref }}
+  group: riscv64-control-plane-demo-${{ inputs.kernel_flavor || 'upstream-7.2' }}-${{ inputs.l0_aia || 'aplic-imsic' }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -279,6 +292,7 @@ jobs:
           L1_PREEMPT: ${{ inputs.l1_preempt || vars.RISCV64_L1_PREEMPT || 'none' }}
           RUNDIR: ${{ runner.temp }}/c1-l1
           QEMU: ${{ env.WORKLOADS_DIR }}/qemu-install/bin/qemu-system-riscv64
+          L0_AIA: ${{ inputs.l0_aia || 'aplic-imsic' }}
           RUN_MODE: control-plane
         run: |
           set -euo pipefail
@@ -290,7 +304,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riscv64-c1-control-plane-logs-${{ inputs.kernel_flavor || 'upstream-7.2' }}
+          name: riscv64-c1-control-plane-logs-${{ inputs.kernel_flavor || 'upstream-7.2' }}-${{ inputs.l0_aia || 'aplic-imsic' }}
           path: |
             ${{ runner.temp }}/c1-l1/serial.log
             ${{ runner.temp }}/c1-l1/control-plane.log

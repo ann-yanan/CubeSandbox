@@ -67,6 +67,7 @@ BIN_DIR="${BIN_DIR:-$(pwd)/_output/bin}"
 L1_SMP="${L1_SMP:-4}"
 L1_MEM="${L1_MEM:-4G}"
 QEMU="${QEMU:-qemu-system-riscv64}"
+L0_AIA="${L0_AIA:-aplic-imsic}"
 L1_PORT="${L1_PORT:-22699}"
 L1_PREEMPT="${L1_PREEMPT:-full}"
 L1_GDBSTUB="${L1_GDBSTUB:-0}"
@@ -510,7 +511,7 @@ fi
 
 # --- boot the L1 (QEMU TCG, H-ext + AIA), host-forward ssh, 9p share ---------
 SERIAL="${RUNDIR}/serial.log"; PIDFILE="${RUNDIR}/qemu.pid"
-info "booting L1: ${QEMU} -cpu max -smp ${L1_SMP} -m ${L1_MEM} (TCG, preempt=${L1_PREEMPT}, gdbstub=${L1_GDBSTUB})"
+info "booting L1: ${QEMU} -cpu max -smp ${L1_SMP} -m ${L1_MEM} (TCG, aia=${L0_AIA}, preempt=${L1_PREEMPT}, gdbstub=${L1_GDBSTUB})"
 GDB_ARGS=()
 if [[ "${L1_GDBSTUB}" == "1" ]]; then
   GDB_ARGS=(-gdb "tcp:127.0.0.1:${L1_GDB_PORT}")
@@ -525,7 +526,7 @@ fi
 # NOTE: this comment must stay OUTSIDE the qemu line-continuation chain --
 # a comment line inside a `\`-continued command terminates the command early.
 "${QEMU}" \
-  -M virt,aia=aplic-imsic,aia-guests=4 -cpu max -smp "${L1_SMP}" -m "${L1_MEM}" \
+  -M "virt,aia=${L0_AIA},aia-guests=4" -cpu max -smp "${L1_SMP}" -m "${L1_MEM}" \
   -bios "${WORKLOADS_DIR}/fw_dynamic.bin" -kernel "${WORKLOADS_DIR}/Image" \
   -append "root=/dev/vda1 rw rootwait console=ttyS0 earlycon=sbi preempt=${L1_PREEMPT}" \
   -drive "file=${ROOT_OVL},format=qcow2,if=virtio" \
