@@ -17,6 +17,7 @@ WORKLOADS_DIR="${WORKLOADS_DIR:-$PWD}"
 OUTPUT_IMAGE="${OUTPUT_IMAGE:-${WORKLOADS_DIR}/Image}"
 KERNEL_CONFIG="${REPO_ROOT}/configs/kernel-oc9.riscv64.config"
 BUILD_KERNEL_SH="${REPO_ROOT}/scripts/build-kernel.sh"
+CROSS_COMPILE="${KERNEL_CROSS_COMPILE:-riscv64-linux-gnu-}"
 WORK_DIR="${WORK_DIR:-$(mktemp -d)}"
 
 [ -f "${KERNEL_CONFIG}" ] || die "kernel config not found: ${KERNEL_CONFIG}"
@@ -36,10 +37,16 @@ mkdir -p "${KERNEL_SRC_DIR}"
 tar -xzf "${archive}" -C "${KERNEL_SRC_DIR}" --strip-components=1
 [ -f "${KERNEL_SRC_DIR}/Makefile" ] || die "extracted tree has no Makefile"
 
+# The shared 7.2 config enables Andes AX45MP errata, which generic QEMU does
+# not need and whose 6.6.36 implementation has a stale BUILD_BUG_ON.
+BUILD_CONFIG="${WORK_DIR}/kernel.config"
+cp "${KERNEL_CONFIG}" "${BUILD_CONFIG}"
+"${KERNEL_SRC_DIR}/scripts/config" --file "${BUILD_CONFIG}" --disable ERRATA_ANDES
+
 KERNEL_SRC_DIR="${KERNEL_SRC_DIR}" \
 KERNEL_TARGET_ARCH=riscv64 \
-KERNEL_CROSS_COMPILE=riscv64-linux-gnu- \
-KERNEL_CONFIG="${KERNEL_CONFIG}" \
+KERNEL_CROSS_COMPILE="${CROSS_COMPILE}" \
+KERNEL_CONFIG="${BUILD_CONFIG}" \
 KERNEL_OUTPUT_DIR="${BUILD_OUT}" \
 KERNEL_BUILD_JOBS="${KERNEL_BUILD_JOBS}" \
   bash "${BUILD_KERNEL_SH}"
