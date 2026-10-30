@@ -63,6 +63,8 @@
 set -euo pipefail
 
 WORKLOADS_DIR="${WORKLOADS_DIR:-$HOME/workloads}"
+L1_IMAGE="${L1_IMAGE:-${WORKLOADS_DIR}/Image}"
+L2_IMAGE="${L2_IMAGE:-${WORKLOADS_DIR}/Image}"
 BIN_DIR="${BIN_DIR:-$(pwd)/_output/bin}"
 L1_SMP="${L1_SMP:-4}"
 L1_MEM="${L1_MEM:-4G}"
@@ -351,9 +353,13 @@ for b in cube-runtime-riscv64 containerd-shim-cube-rs-riscv64 cube-agent-riscv64
   [[ -x "${BIN_DIR}/${b}" ]] || die "missing component binary ${BIN_DIR}/${b}"
 done
 [[ -x "${INTEGRATION}" ]] || chmod +x "${INTEGRATION}" 2>/dev/null || die "integration script not found: ${INTEGRATION}"
-# The L1 kernel must be a PE/EFI-stub Image (CH riscv64 load_kernel rejects ELF).
-magic=$(head -c2 "${WORKLOADS_DIR}/Image" 2>/dev/null || true)
-[[ "${magic}" == "MZ" ]] || die "Image is not a PE/EFI-stub (magic='${magic}'); CH would reject it"
+# Both the L1 host kernel and the independently selected L2 guest kernel must
+# be PE/EFI-stub Images (CH riscv64 load_kernel rejects ELF).
+for kernel_image in "${L1_IMAGE}" "${L2_IMAGE}"; do
+  [[ -s "${kernel_image}" ]] || die "missing kernel image ${kernel_image}"
+  magic=$(head -c2 "${kernel_image}" 2>/dev/null || true)
+  [[ "${magic}" == "MZ" ]] || die "${kernel_image} is not a PE/EFI-stub (magic='${magic}'); CH would reject it"
+done
 
 # --- control-plane mode preflight --------------------------------------------
 if [[ "${RUN_MODE}" == "control-plane" ]]; then
@@ -452,8 +458,8 @@ SHARE="${RUNDIR}/share"; mkdir -p "${SHARE}"
 cp -f "${WORKLOADS_DIR}"/{Image,fw_dynamic.bin,cube-guest-image-cpu.img,cube-agent.ext4,cube-spec.json,cube-spec-restore.json,cube-min.tar} "${SHARE}/"
 cp -f "${BIN_DIR}"/{cube-runtime-riscv64,containerd-shim-cube-rs-riscv64,cube-agent-riscv64,cube-init-riscv64} "${SHARE}/"
 cp -f "${INTEGRATION}" "${SHARE}/run_integration_tests_riscv64.sh"
-# vmlinux is the name the shim expects for cube-kernel-scf/vmlinux.
-cp -f "${WORKLOADS_DIR}/Image" "${SHARE}/vmlinux"
+# vmlinux is the L2 guest kernel name expected for cube-kernel-scf/vmlinux.
+cp -f "${L2_IMAGE}" "${SHARE}/vmlinux"
 
 # The Ubuntu cloudimg L1 ships no containerd; stage the official release
 # tarball (public, same fetch style as fetch_guest_assets_riscv64.sh). The
@@ -527,7 +533,7 @@ fi
 # a comment line inside a `\`-continued command terminates the command early.
 "${QEMU}" \
   -M "virt,aia=${L0_AIA},aia-guests=4" -cpu max -smp "${L1_SMP}" -m "${L1_MEM}" \
-  -bios "${WORKLOADS_DIR}/fw_dynamic.bin" -kernel "${WORKLOADS_DIR}/Image" \
+  -bios "${WORKLOADS_DIR}/fw_dynamic.bin" -kernel "${L1_IMAGE}" \
   -append "root=/dev/vda1 rw rootwait console=ttyS0 earlycon=sbi preempt=${L1_PREEMPT}" \
   -drive "file=${ROOT_OVL},format=qcow2,if=virtio" \
   -drive "file=${DATA_DISK},format=raw,if=virtio" \

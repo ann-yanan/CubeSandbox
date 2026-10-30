@@ -164,8 +164,9 @@ jobs:
             || make all-riscv64 SKIP_BUILDER_IMAGE_CHECK=1
           make l2pause-riscv64 SKIP_BUILDER_IMAGE_CHECK=1 || make l2pause-riscv64
 
-      # Use the selected kernel for both L1 and L2. Each flavor has an
-      # independent input-hashed cache with no restore-keys fallback.
+      # The default lane shares its patched 7.2 Image between L1 and L2.
+      # The RuyiSDK lane keeps a 6.6 L1 but uses the validated patched 7.2
+      # kernel for L2, avoiding the unsupported old-6.6 guest IMSIC path.
       - name: Cache patched 7.2 guest kernel Image
         id: cache-kernel-upstream
         if: (inputs.kernel_flavor || 'upstream-7.2') == 'upstream-7.2'
@@ -187,6 +188,27 @@ jobs:
           # Fixed WORK_DIR (instead of the script's mktemp default) so the built
           # vmlinux lands at a known path for the gdbstub wedge-debug step.
           WORK_DIR: ${{ runner.temp }}/kernel-build
+        run: |
+          set -euo pipefail
+          chmod +x hypervisor/scripts/build_guest_kernel_riscv64.sh
+          hypervisor/scripts/build_guest_kernel_riscv64.sh
+
+      - name: Cache patched 7.2 L2 kernel for the RuyiSDK L1
+        id: cache-kernel-l2-upstream
+        if: inputs.kernel_flavor == 'xuantie-6.6.36'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.WORKLOADS_DIR }}/Image-l2
+            ${{ runner.temp }}/kernel-l2-build/build/vmlinux
+            ${{ runner.temp }}/kernel-l2-build/build/vmlinux.elf
+          key: kernel-7.2-riscv64-l2-v1-${{ hashFiles('configs/kernel-oc9.riscv64.config', 'configs/patches/riscv64-dax-zeropage-folio.patch', 'configs/patches/riscv64-kvm-zeropage-dirtylog.patch', 'configs/patches/riscv64-kvm-vstimecmp-next-cycles.patch', 'scripts/build-kernel.sh', 'hypervisor/scripts/build_guest_kernel_riscv64.sh') }}
+
+      - name: Build patched 7.2 L2 kernel for the RuyiSDK L1
+        if: inputs.kernel_flavor == 'xuantie-6.6.36' && steps.cache-kernel-l2-upstream.outputs.cache-hit != 'true'
+        env:
+          WORK_DIR: ${{ runner.temp }}/kernel-l2-build
+          OUTPUT_IMAGE: ${{ env.WORKLOADS_DIR }}/Image-l2
         run: |
           set -euo pipefail
           chmod +x hypervisor/scripts/build_guest_kernel_riscv64.sh
@@ -293,6 +315,7 @@ jobs:
           RUNDIR: ${{ runner.temp }}/c1-l1
           QEMU: ${{ env.WORKLOADS_DIR }}/qemu-install/bin/qemu-system-riscv64
           L0_AIA: ${{ inputs.l0_aia || 'aplic-imsic' }}
+          L2_IMAGE: ${{ inputs.kernel_flavor == 'xuantie-6.6.36' && format('{0}/Image-l2', env.WORKLOADS_DIR) || '' }}
           RUN_MODE: control-plane
         run: |
           set -euo pipefail
