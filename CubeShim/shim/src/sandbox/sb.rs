@@ -568,7 +568,7 @@ impl SandBox {
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|v| *v > 0)
             .unwrap_or(25);
-        ctx.timeout_nano = create_sandbox_secs * 1000 * 1000 * 1000;
+        ctx.timeout_nano = create_sandbox_secs as i64 * 1000 * 1000 * 1000;
         if self.app_snapshot_create() {
             req.start_mode = protoc::agent::StartMode::SNAPSHOT;
         }
