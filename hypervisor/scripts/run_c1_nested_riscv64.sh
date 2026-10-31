@@ -684,7 +684,7 @@ case "${RUN_MODE}" in
         sleep 3
       done
       [[ -s /mnt/share/run_control_plane_riscv64.sh ]] || { echo \"FATAL: 9p share never populated\"; exit 1; }
-      TRACE_KVM='"${L1_TRACE_KVM}"' bash /mnt/share/run_control_plane_riscv64.sh < /dev/null
+      CUBE_AGENT_CREATE_SANDBOX_TIMEOUT_SECS='"${CUBE_AGENT_CREATE_SANDBOX_TIMEOUT_SECS:-25}"' TRACE_KVM='"${L1_TRACE_KVM}"' bash /mnt/share/run_control_plane_riscv64.sh < /dev/null
       echo \$? > /mnt/share/control-plane.rc
       sync
       poweroff -f
