@@ -81,6 +81,7 @@ on:
         options:
           - upstream-7.2
           - xuantie-6.6.36
+          - xtlinux-devmap
       l1_preempt:
         description: L1 dynamic preemption mode
         required: true
@@ -214,6 +215,18 @@ jobs:
           chmod +x hypervisor/scripts/build_guest_kernel_riscv64.sh
           hypervisor/scripts/build_guest_kernel_riscv64.sh
 
+      - name: Fetch validated xt-linux devmap Image
+        if: inputs.kernel_flavor == 'xtlinux-devmap'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${WORKLOADS_DIR}"
+          base="https://github.com/${{ github.repository }}/releases/download/ci-assets"
+          curl -fSL --retry 3 -H "Authorization: Bearer ${GH_TOKEN}" \
+            -o "${WORKLOADS_DIR}/Image" "${base}/Image-xtlinux-devmap"
+          sha256sum "${WORKLOADS_DIR}/Image"
+
       - name: Cache RuyiSDK 6.6.36 guest kernel Image
         id: cache-kernel-xuantie
         if: inputs.kernel_flavor == 'xuantie-6.6.36'
@@ -312,7 +325,7 @@ jobs:
           # RISCV64_L1_PREEMPT=lazy raises the ~5% wedge rate to ~50%.
           L1_GDBSTUB: ${{ vars.RISCV64_L1_GDBSTUB || '0' }}
           L1_PREEMPT: ${{ inputs.l1_preempt || vars.RISCV64_L1_PREEMPT || 'none' }}
-          CUBE_AGENT_CREATE_SANDBOX_TIMEOUT_SECS: ${{ inputs.kernel_flavor == 'xuantie-6.6.36' && '120' || '25' }}
+          CUBE_AGENT_CREATE_SANDBOX_TIMEOUT_SECS: ${{ (inputs.kernel_flavor == 'xuantie-6.6.36' || inputs.kernel_flavor == 'xtlinux-devmap') && '120' || '25' }}
           RUNDIR: ${{ runner.temp }}/c1-l1
           QEMU: ${{ env.WORKLOADS_DIR }}/qemu-install/bin/qemu-system-riscv64
           L0_AIA: ${{ inputs.l0_aia || 'aplic-imsic' }}

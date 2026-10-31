@@ -250,10 +250,10 @@ jobs:
           retention-days: 7
 
   control-plane-xuantie-6-6:
-    name: riscv64 XuanTie 6.6.36 control plane + snapshot demo
+    name: riscv64 xt-linux devmap control plane + snapshot demo
     uses: ./.github/workflows/riscv64-control-plane-demo.yml
     with:
-      kernel_flavor: xuantie-6.6.36
+      kernel_flavor: xtlinux-devmap
       l1_preempt: full
       l0_aia: aplic-imsic
     secrets: inherit
