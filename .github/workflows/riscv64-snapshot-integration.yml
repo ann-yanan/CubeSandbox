@@ -76,6 +76,15 @@ on:
       - '.github/workflows/riscv64-control-plane-demo.yml'
       - '.github/workflows/riscv64-snapshot-integration.yml'
   workflow_dispatch:
+    inputs:
+      kernel_flavor:
+        description: Kernel source flavor for the snapshotter job
+        required: true
+        type: choice
+        default: upstream-7.2
+        options:
+          - upstream-7.2
+          - xtlinux-devmap
 
 concurrency:
   group: riscv64-snapshot-${{ github.event.pull_request.number || github.ref }}
@@ -158,6 +167,7 @@ jobs:
 
       - name: Cache 7.2 guest kernel Image
         id: cache-kernel
+        if: inputs.kernel_flavor != 'xtlinux-devmap'
         uses: actions/cache@v4
         with:
           path: ${{ env.WORKLOADS_DIR }}/Image
@@ -167,7 +177,7 @@ jobs:
           key: kernel-7.2-riscv64-v1-${{ hashFiles('configs/kernel-oc9.riscv64.config', 'configs/patches/riscv64-dax-zeropage-folio.patch', 'configs/patches/riscv64-kvm-zeropage-dirtylog.patch', 'configs/patches/riscv64-kvm-vstimecmp-next-cycles.patch', 'scripts/build-kernel.sh', 'hypervisor/scripts/build_guest_kernel_riscv64.sh') }}
 
       - name: Build 7.2 guest kernel Image (in-place, cross-compiled)
-        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        if: inputs.kernel_flavor != 'xtlinux-devmap' && steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           chmod +x hypervisor/scripts/build_guest_kernel_riscv64.sh
@@ -175,6 +185,18 @@ jobs:
           # Serves BOTH the C1 L1 host kernel (qemu -kernel, needs /dev/kvm) and the
           # L2 guest kernel. WORKLOADS_DIR is inherited from the workflow env.
           hypervisor/scripts/build_guest_kernel_riscv64.sh
+
+      - name: Fetch validated xt-linux devmap Image
+        if: inputs.kernel_flavor == 'xtlinux-devmap'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${WORKLOADS_DIR}"
+          base="https://github.com/${{ github.repository }}/releases/download/ci-assets"
+          curl -fSL --retry 3 -H "Authorization: Bearer ${GH_TOKEN}" \
+            -o "${WORKLOADS_DIR}/Image-xtlinux-devmap" "${base}/Image-xtlinux-devmap-20261103"
+          echo "fb1ac89d5239514860f356a5df9f2128375a6cfd6e53b49848ae671b823befe2  ${WORKLOADS_DIR}/Image-xtlinux-devmap" | sha256sum -c -
 
       - name: Cache riscv64 guest assets (opensbi fw + Ubuntu rootfs raw)
         uses: actions/cache@v4
@@ -231,6 +253,8 @@ jobs:
           # The community qemu 11 built above -- NOT the distro qemu (8.2.2's
           # broken TCG IMSIC/AIA would panic the shim at check_required_extensions).
           QEMU: ${{ env.WORKLOADS_DIR }}/qemu-install/bin/qemu-system-riscv64
+          L1_IMAGE: ${{ inputs.kernel_flavor == 'xtlinux-devmap' && format('{0}/Image-xtlinux-devmap', env.WORKLOADS_DIR) || '' }}
+          L2_IMAGE: ${{ inputs.kernel_flavor == 'xtlinux-devmap' && format('{0}/Image-xtlinux-devmap', env.WORKLOADS_DIR) || '' }}
         run: |
           set -euo pipefail
           chmod +x hypervisor/scripts/run_c1_nested_riscv64.sh \
