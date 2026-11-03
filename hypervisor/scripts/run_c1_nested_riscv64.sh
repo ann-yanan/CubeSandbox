@@ -345,7 +345,10 @@ if [ -n "${qemu_maj}" ] && [ "${qemu_maj}" -lt 11 ]; then
 fi
 
 # --- preflight: required assets ---------------------------------------------
-for a in Image fw_dynamic.bin cube-guest-image-cpu.img cube-agent.ext4 \
+# The kernel Image is validated separately below via L1_IMAGE/L2_IMAGE (which
+# honor the kernel_flavor dispatch input, e.g. Image-xtlinux-devmap), so it is
+# deliberately not in this fixed-name list.
+for a in fw_dynamic.bin cube-guest-image-cpu.img cube-agent.ext4 \
          cube-spec.json cube-spec-restore.json cube-min.tar; do
   [[ -s "${WORKLOADS_DIR}/${a}" ]] || die "missing asset ${WORKLOADS_DIR}/${a}"
 done
@@ -455,7 +458,7 @@ fi
 
 # --- 9p share: assets + binaries + integration script handed to the L1 -------
 SHARE="${RUNDIR}/share"; mkdir -p "${SHARE}"
-cp -f "${WORKLOADS_DIR}"/{Image,fw_dynamic.bin,cube-guest-image-cpu.img,cube-agent.ext4,cube-spec.json,cube-spec-restore.json,cube-min.tar} "${SHARE}/"
+cp -f "${WORKLOADS_DIR}"/{fw_dynamic.bin,cube-guest-image-cpu.img,cube-agent.ext4,cube-spec.json,cube-spec-restore.json,cube-min.tar} "${SHARE}/"
 cp -f "${BIN_DIR}"/{cube-runtime-riscv64,containerd-shim-cube-rs-riscv64,cube-agent-riscv64,cube-init-riscv64} "${SHARE}/"
 cp -f "${INTEGRATION}" "${SHARE}/run_integration_tests_riscv64.sh"
 # Integration reads Image; vmlinux is retained for the outer staging helper.

@@ -282,6 +282,10 @@ dump_all_logs() {
 
 FAILED=1
 on_exit() {
+  # Forensics only: never let a dump command (e.g. awk racing a vanished
+  # /proc/PID/task/TID/stat in dump_wedge_forensics) trip `set -e` and leak a
+  # non-zero exit code that would override the demo's real PASS status.
+  set +e
   echo "=== [cp] final state: $([[ ${FAILED} -eq 0 ]] && echo PASS || echo FAIL) ==="
   # Marker for the outer runner's gdbstub watcher: on failure, hold the L1 up
   # (below) so the host can attach to the still-wedged L2 before poweroff.
