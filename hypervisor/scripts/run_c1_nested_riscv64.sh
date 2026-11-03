@@ -458,7 +458,8 @@ SHARE="${RUNDIR}/share"; mkdir -p "${SHARE}"
 cp -f "${WORKLOADS_DIR}"/{Image,fw_dynamic.bin,cube-guest-image-cpu.img,cube-agent.ext4,cube-spec.json,cube-spec-restore.json,cube-min.tar} "${SHARE}/"
 cp -f "${BIN_DIR}"/{cube-runtime-riscv64,containerd-shim-cube-rs-riscv64,cube-agent-riscv64,cube-init-riscv64} "${SHARE}/"
 cp -f "${INTEGRATION}" "${SHARE}/run_integration_tests_riscv64.sh"
-# vmlinux is the L2 guest kernel name expected for cube-kernel-scf/vmlinux.
+# Integration reads Image; vmlinux is retained for the outer staging helper.
+cp -f "${L2_IMAGE}" "${SHARE}/Image"
 cp -f "${L2_IMAGE}" "${SHARE}/vmlinux"
 
 # The Ubuntu cloudimg L1 ships no containerd; stage the official release
