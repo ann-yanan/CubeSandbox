@@ -294,7 +294,6 @@ fn measure_boot_time_wallclock(
     let r = std::panic::catch_unwind(|| {
         guest
             .wait_vm_boot(Some(boot_timeout as i32))
-            .map_err(InfraError::WaitForBoot)
             .unwrap();
         start.elapsed().as_secs_f64()
     });
