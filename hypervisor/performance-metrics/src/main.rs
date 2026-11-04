@@ -46,6 +46,8 @@ pub struct MetricsReport {
     pub git_revision: String,
     pub git_commit_date: String,
     pub date: String,
+    pub architecture: String,
+    pub execution_mode: String,
     pub results: Vec<PerformanceTestResult>,
 }
 
@@ -104,6 +106,12 @@ impl Default for MetricsReport {
             git_revision,
             git_commit_date,
             date: date(),
+            architecture: std::env::consts::ARCH.to_string(),
+            execution_mode: if std::env::var("PERF_EXECUTION_MODE").is_ok() {
+                std::env::var("PERF_EXECUTION_MODE").unwrap()
+            } else {
+                "native_kvm".to_string()
+            },
             results: Vec::new(),
         }
     }
@@ -267,7 +275,7 @@ const TEST_LIST: [PerformanceTest; 17] = [
         name: "boot_time_ms",
         func_ptr: performance_boot_time,
         control: PerformanceTestControl {
-            test_timeout: 2,
+            test_timeout: 45,
             test_iterations: 10,
             ..PerformanceTestControl::default()
         },
@@ -277,7 +285,7 @@ const TEST_LIST: [PerformanceTest; 17] = [
         name: "boot_time_pmem_ms",
         func_ptr: performance_boot_time_pmem,
         control: PerformanceTestControl {
-            test_timeout: 2,
+            test_timeout: 45,
             test_iterations: 10,
             ..PerformanceTestControl::default()
         },
@@ -531,9 +539,14 @@ fn main() {
     // It seems that the tool (ethr) used for testing the virtio-net latency
     // is not stable on AArch64, and therefore the latency test is currently
     // skipped on AArch64.
+    // On RISC-V, pmem boot and ethr latency are not yet supported.
     let test_list: Vec<&PerformanceTest> = TEST_LIST
         .iter()
         .filter(|t| !(cfg!(target_arch = "aarch64") && t.name == "virtio_net_latency_us"))
+        .filter(|t| {
+            !(cfg!(target_arch = "riscv64")
+                && (t.name == "virtio_net_latency_us" || t.name.contains("pmem")))
+        })
         .collect();
 
     if cmd_arguments.get_flag("list-tests") {

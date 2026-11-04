@@ -1474,6 +1474,9 @@ impl<'a> GuestCommand<'a> {
 }
 
 pub fn clh_command(cmd: &str) -> String {
+    if let Ok(binary) = env::var("CLH_BINARY") {
+        return binary;
+    }
     env::var("BUILD_TARGET").map_or(
         format!("target/x86_64-unknown-linux-gnu/release/{}", cmd),
         |target| format!("target/{}/release/{}", target, cmd),

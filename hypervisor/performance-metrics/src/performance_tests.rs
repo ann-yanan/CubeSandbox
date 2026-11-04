@@ -10,7 +10,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::string::String;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use test_infra::Error as InfraError;
 use test_infra::*;
 
@@ -18,6 +18,15 @@ use test_infra::*;
 pub const FOCAL_IMAGE_NAME: &str = "focal-server-cloudimg-amd64-custom-20210609-0.raw";
 #[cfg(target_arch = "aarch64")]
 pub const FOCAL_IMAGE_NAME: &str = "focal-server-cloudimg-arm64-custom-20210929-0-update-tool.raw";
+#[cfg(target_arch = "riscv64")]
+pub const FOCAL_IMAGE_NAME: &str = "ubuntu-riscv64-perf.raw";
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+const DIRECT_KERNEL_BOOT_CMDLINE: &str =
+    "root=/dev/vda1 console=hvc0 rw systemd.journald.forward_to_console=1";
+#[cfg(target_arch = "riscv64")]
+const DIRECT_KERNEL_BOOT_CMDLINE: &str =
+    "root=/dev/vda1 console=ttyS0 rw systemd.journald.forward_to_console=1";
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -59,12 +68,9 @@ fn performance_test_new_guest(disk_config: Box<dyn DiskConfig>) -> Guest {
     Guest::new_from_ip_range(disk_config, "172.19", 0)
 }
 
-const DIRECT_KERNEL_BOOT_CMDLINE: &str =
-    "root=/dev/vda1 console=hvc0 rw systemd.journald.forward_to_console=1";
-
 // Creates the path for direct kernel boot and return the path.
 // For x86_64, this function returns the vmlinux kernel path.
-// For AArch64, this function returns the PE kernel path.
+// For AArch64 and RISC-V, this function returns the PE kernel path.
 fn direct_kernel_boot_path() -> PathBuf {
     let mut workload_path = dirs::home_dir().unwrap();
     workload_path.push("workloads");
@@ -72,10 +78,14 @@ fn direct_kernel_boot_path() -> PathBuf {
     let mut kernel_path = workload_path;
     #[cfg(target_arch = "x86_64")]
     kernel_path.push("vmlinux");
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
     kernel_path.push("Image");
 
     kernel_path
+}
+
+fn guest_memory_size(default: &str) -> String {
+    std::env::var("PERF_GUEST_MEMORY").unwrap_or_else(|_| default.to_string())
 }
 
 pub fn performance_net_throughput(control: &PerformanceTestControl) -> f64 {
@@ -94,7 +104,7 @@ pub fn performance_net_throughput(control: &PerformanceTestControl) -> f64 {
 
     let mut child = GuestCommand::new(&guest)
         .args(["--cpus", &format!("boot={}", num_queues)])
-        .args(["--memory", "size=4G"])
+        .args(["--memory", &format!("size={}", guest_memory_size("4G"))])
         .args(["--kernel", direct_kernel_boot_path().to_str().unwrap()])
         .args(["--cmdline", DIRECT_KERNEL_BOOT_CMDLINE])
         .default_disks()
@@ -135,7 +145,7 @@ pub fn performance_net_latency(control: &PerformanceTestControl) -> f64 {
 
     let mut child = GuestCommand::new(&guest)
         .args(["--cpus", &format!("boot={}", num_queues)])
-        .args(["--memory", "size=4G"])
+        .args(["--memory", &format!("size={}", guest_memory_size("4G"))])
         .args(["--kernel", direct_kernel_boot_path().to_str().unwrap()])
         .args(["--cmdline", DIRECT_KERNEL_BOOT_CMDLINE])
         .default_disks()
@@ -182,19 +192,16 @@ fn parse_boot_time_output(output: &[u8]) -> Result<f64, Error> {
         );
 
         let time_stamp_kernel_start = {
-            let s = l[0].split("--").collect::<Vec<&str>>();
-            assert_eq!(
-                s.len(),
-                2,
-                "Expecting '--' for the matching line of 'Debug I/O port' output"
-            );
+            let s = l[0]
+                .rsplit_once("--")
+                .expect("Expecting '--' for the matching line of 'Debug I/O port' output");
 
             // Sample output: "[Debug I/O port: Kernel code 0x40] 0.096537 seconds"
             assert!(
-                s[1].contains("0x40"),
+                s.1.contains("0x40"),
                 "Expecting kernel code '0x40' for 'linux_kernel_start' time stamp output"
             );
-            let t = s[1].split_whitespace().collect::<Vec<&str>>();
+            let t = s.1.split_whitespace().collect::<Vec<&str>>();
             assert_eq!(
                 t.len(),
                 8,
@@ -209,19 +216,16 @@ fn parse_boot_time_output(output: &[u8]) -> Result<f64, Error> {
         };
 
         let time_stamp_user_start = {
-            let s = l[1].split("--").collect::<Vec<&str>>();
-            assert_eq!(
-                s.len(),
-                2,
-                "Expecting '--' for the matching line of 'Debug I/O port' output"
-            );
+            let s = l[1]
+                .rsplit_once("--")
+                .expect("Expecting '--' for the matching line of 'Debug I/O port' output");
 
             // Sample output: "Debug I/O port: Kernel code 0x41] 0.198980 seconds"
             assert!(
-                s[1].contains("0x41"),
+                s.1.contains("0x41"),
                 "Expecting kernel code '0x41' for 'linux_kernel_start' time stamp output"
             );
-            let t = s[1].split_whitespace().collect::<Vec<&str>>();
+            let t = s.1.split_whitespace().collect::<Vec<&str>>();
             assert_eq!(
                 t.len(),
                 8,
@@ -248,6 +252,7 @@ fn parse_boot_time_output(output: &[u8]) -> Result<f64, Error> {
 
 fn measure_boot_time(cmd: &mut GuestCommand, test_timeout: u32) -> Result<f64, Error> {
     let mut child = cmd
+        .args(["--log-stderr"])
         .capture_output()
         .verbosity(VerbosityLevel::Warn)
         .set_print_cmd(false)
@@ -272,6 +277,40 @@ fn measure_boot_time(cmd: &mut GuestCommand, test_timeout: u32) -> Result<f64, E
     })
 }
 
+#[cfg(target_arch = "riscv64")]
+fn measure_boot_time_wallclock(
+    cmd: &mut GuestCommand,
+    guest: &Guest,
+    boot_timeout: u32,
+) -> Result<f64, Error> {
+    let mut child = cmd
+        .capture_output()
+        .verbosity(VerbosityLevel::Warn)
+        .set_print_cmd(false)
+        .spawn()
+        .unwrap();
+
+    let start = Instant::now();
+    let r = std::panic::catch_unwind(|| {
+        guest
+            .wait_vm_boot(Some(boot_timeout as i32))
+            .map_err(InfraError::WaitForBoot)
+            .unwrap();
+        start.elapsed().as_secs_f64()
+    });
+
+    let _ = child.kill();
+    let output = child.wait_with_output().unwrap();
+
+    match r {
+        Ok(elapsed) => Ok(elapsed),
+        Err(e) => {
+            handle_child_output(Err(e), &output);
+            Err(Error::BootTimeParse)
+        }
+    }
+}
+
 pub fn performance_boot_time(control: &PerformanceTestControl) -> f64 {
     let r = std::panic::catch_unwind(|| {
         let focal = UbuntuDiskConfig::new(FOCAL_IMAGE_NAME.to_string());
@@ -283,13 +322,24 @@ pub fn performance_boot_time(control: &PerformanceTestControl) -> f64 {
                 "--cpus",
                 &format!("boot={}", control.num_boot_vcpus.unwrap_or(1)),
             ])
-            .args(["--memory", "size=1G"])
+            .args(["--memory", &format!("size={}", guest_memory_size("1G"))])
             .args(["--kernel", direct_kernel_boot_path().to_str().unwrap()])
             .args(["--cmdline", DIRECT_KERNEL_BOOT_CMDLINE])
             .args(["--console", "off"])
             .default_disks();
 
-        measure_boot_time(c, control.test_timeout).unwrap()
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        {
+            measure_boot_time(c, control.test_timeout).unwrap()
+        }
+        #[cfg(target_arch = "riscv64")]
+        {
+            let boot_timeout = std::env::var("PERF_VM_BOOT_TIMEOUT")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(180);
+            measure_boot_time_wallclock(c, &guest, boot_timeout).unwrap()
+        }
     });
 
     match r {
@@ -310,7 +360,7 @@ pub fn performance_boot_time_pmem(control: &PerformanceTestControl) -> f64 {
                 "--cpus",
                 &format!("boot={}", control.num_boot_vcpus.unwrap_or(1)),
             ])
-            .args(["--memory", "size=1G,hugepages=on"])
+            .args(["--memory", &format!("size={},hugepages=on", guest_memory_size("1G"))])
             .args(["--kernel", direct_kernel_boot_path().to_str().unwrap()])
             .args(["--cmdline", "root=/dev/pmem0p1 console=ttyS0 quiet rw"])
             .args(["--console", "off"])
@@ -351,7 +401,7 @@ pub fn performance_block_io(control: &PerformanceTestControl) -> f64 {
 
     let mut child = GuestCommand::new(&guest)
         .args(["--cpus", &format!("boot={}", num_queues)])
-        .args(["--memory", "size=4G"])
+        .args(["--memory", &format!("size={}", guest_memory_size("4G"))])
         .args(["--kernel", direct_kernel_boot_path().to_str().unwrap()])
         .args(["--cmdline", DIRECT_KERNEL_BOOT_CMDLINE])
         .args([
