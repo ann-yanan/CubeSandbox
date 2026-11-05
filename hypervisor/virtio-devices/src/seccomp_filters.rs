@@ -547,7 +547,13 @@ mod tests {
     #[test]
     fn strict_balloon_filter_compiles() {
         let filter = get_seccomp_filter(&SeccompAction::Trap, Thread::VirtioBalloon).unwrap();
+        // seccomp is disabled on riscv64 (seccompiler 0.3 has no riscv64 target),
+        // so get_seccomp_filter returns an empty program there. Only assert a
+        // non-empty compiled filter where seccomp is actually supported.
+        #[cfg(not(target_arch = "riscv64"))]
         assert!(!filter.is_empty());
+        #[cfg(target_arch = "riscv64")]
+        assert!(filter.is_empty());
     }
 
     #[cfg(target_os = "linux")]
@@ -559,7 +565,11 @@ mod tests {
         assert!(pid >= 0, "fork failed: {}", std::io::Error::last_os_error());
 
         if pid == 0 {
-            if apply_filter(&filter).is_err() {
+            // Mirror the product apply path: an empty filter means seccomp is
+            // disabled on this arch (riscv64 has no seccompiler target), and
+            // SECCOMP_SET_MODE_FILTER rejects a 0-insn BPF program with EINVAL,
+            // so skip apply_filter when the filter is empty.
+            if !filter.is_empty() && apply_filter(&filter).is_err() {
                 unsafe { libc::syscall(libc::SYS_exit, 3) };
             }
             let mut credentials = std::mem::MaybeUninit::<libc::ucred>::uninit();
