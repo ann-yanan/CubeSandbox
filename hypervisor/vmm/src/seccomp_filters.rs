@@ -993,7 +993,14 @@ mod tests {
         assert!(pid >= 0, "fork failed: {}", std::io::Error::last_os_error());
 
         if pid == 0 {
-            if apply_filter(&parent_filter).is_err() || apply_filter(&child_filter).is_err() {
+            // Mirror the product apply path (vmm/src/lib.rs): an empty filter
+            // means seccomp is disabled on this arch (seccompiler 0.3 has no
+            // riscv64 target, so get_seccomp_filter returns an empty program
+            // there). SECCOMP_SET_MODE_FILTER rejects a 0-insn BPF program with
+            // EINVAL, so skip apply_filter when the filter is empty.
+            if (!parent_filter.is_empty() && apply_filter(&parent_filter).is_err())
+                || (!child_filter.is_empty() && apply_filter(&child_filter).is_err())
+            {
                 unsafe { libc::syscall(libc::SYS_exit, 3) };
             }
             let mut credentials = std::mem::MaybeUninit::<libc::ucred>::uninit();

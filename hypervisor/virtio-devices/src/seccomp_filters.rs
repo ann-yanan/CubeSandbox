@@ -481,6 +481,18 @@ pub fn get_seccomp_filter(
     seccomp_action: &SeccompAction,
     thread_type: Thread,
 ) -> Result<BpfProgram, Error> {
+    // seccompiler 0.3 has no riscv64 target: `std::env::consts::ARCH.try_into()`
+    // yields InvalidTargetArch("riscv64"), and the SeccompArch type is not
+    // publicly nameable here. Rather than unwrap-panic, run riscv64 without a
+    // seccomp filter (an empty BpfProgram == SeccompAction::Allow), mirroring
+    // vmm/src/seccomp_filters.rs. Re-enable per-arch once seccompiler gains a
+    // riscv64 SeccompArch.
+    #[cfg(target_arch = "riscv64")]
+    {
+        let _ = (seccomp_action, thread_type);
+        return Ok(vec![]);
+    }
+    #[cfg(not(target_arch = "riscv64"))]
     match seccomp_action {
         SeccompAction::Allow => Ok(vec![]),
         SeccompAction::KillProcess => Ok(vec![]),
